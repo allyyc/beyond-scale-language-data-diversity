@@ -7,7 +7,9 @@ todo:
     - use the re-init code smart ally & brando wrote
 """
 from itertools import chain
+import math
 import random
+from typing import Optional
 
 import torch
 
@@ -16,6 +18,67 @@ from datasets import load_dataset, interleave_datasets
 
 from transformers import PreTrainedTokenizer, AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments, AutoConfig
 from transformers.testing_utils import CaptureLogger
+from transformers import GPT2Tokenizer
+
+def cuda_debug():
+    import torch
+
+    # Check if CUDA is available
+    cuda_available = torch.cuda.is_available()
+    print(f"CUDA available: {cuda_available}")
+
+    # Get the CUDA version used by PyTorch
+    cuda_version = torch.version.cuda
+    print(f"CUDA version: {cuda_version}")
+
+    # Get the number of CUDA devices (GPUs)
+    num_cuda_devices = torch.cuda.device_count()
+    print(f"Number of CUDA devices: {num_cuda_devices}")
+
+# # For each CUDA device, print its name and capabilities
+# for i in range(num_cuda_devices):
+#     print(f"CUDA Device {i}: {torch.cuda.get_device_name(i)}")
+#     print(f"Compute Capability: {torch.cuda.get_device_capability(i)}")
+
+
+def do_quick_matrix_multiply():
+    """
+python -c "import torch; print(torch.randn(2, 4).to('cuda') @ torch.randn(4, 1).to('cuda'));"
+    """
+    print(torch.randn(2, 4).to('cuda') @ torch.randn(4, 1).to('cuda'))
+
+def get_actual_data_batch(data_set_or_batch):
+    """ Returns the actual  data batch from the HF dataset obj e.g., dataset, batch etc. """
+    data_batch = next(iter(data_set_or_batch))
+    return data_batch
+
+def get_vocab_size_and_ln(tokenizer: GPT2Tokenizer) -> tuple[int, float]:
+    """
+    Calculate the vocabulary size and its natural logarithm for a given tokenizer.
+
+    Note:
+        Sanity check -- is loss random? lnV = -ln(1/V) = -ln(1/50257) = 10.82 since CE = avg_i v_i * ln(1/p_i) but only one token is right so vi = 1 for some i so CE = ln(1/p_i)
+
+    Args:
+    tokenizer (GPT2Tokenizer): A tokenizer from the Hugging Face library.
+
+    Returns:
+    tuple[int, float]: A tuple containing the vocabulary size and its natural logarithm.
+    """
+    vocab_size = len(tokenizer)  # Get the size of the tokenizer's vocabulary
+    ln_vocab_size = math.log(vocab_size)  # Calculate the natural logarithm of the vocabulary size
+    return vocab_size, ln_vocab_size
+
+def num_tokens(max_steps: int, batch_size: int, L: int, num_batches: int) -> int:
+    """
+    All sequences are of length L, due to our block size code. 
+    num_batch = when using distributed training. 
+            num_tokens_trained = max_steps * batch_size * L * num_batches
+
+    how long do I have to train     
+    """
+    num_tokens_trained = max_steps * batch_size * L * num_batches
+    return num_tokens_trained
 
 def get_freest_gpu():
     # Get the index of the GPU with the most free memory
@@ -53,6 +116,22 @@ def get_num_steps():
     # dataset_size = sum(dataset.cardinality() for dataset in datasets)
     pass
 
+def raw_dataset_2_lm_data(raw_dataset, 
+                          tokenizer, 
+                          block_size: int, 
+                          desired_dataset_column: str = 'text',
+                          method_to_remove_columns: str = 'keys',
+                          ):
+    remove_columns = get_column_names(raw_dataset, method_to_remove_columns)  # remove all keys that are not tensors to avoid bugs in collate function in task2vec's pytorch data loader
+    # - Get tokenized train data set
+    # Note: Setting `batched=True` in the `dataset.map` function of Hugging Face's datasets library processes the data in batches rather than one item at a time, significantly speeding up the tokenization and preprocessing steps.
+    tokenize_function = lambda examples: tokenizer(examples[desired_dataset_column])
+    tokenized_train_datasets = raw_dataset.map(tokenize_function, batched=True, remove_columns=remove_columns)
+    _group_texts = lambda examples : group_texts(examples, block_size)
+    # - Get actual data set for lm training (in this case each seq is of length block_size, no need to worry about pad = eos since we are filling each sequence)
+    lm_dataset = tokenized_train_datasets.map(_group_texts, batched=True)
+    return lm_dataset
+
 def get_size_of_seq_len(dataset_or_batch, verbose: bool = True, streaming: bool = True, batch_size: int = 2) -> int:
     """Print size of a sequence length in a batch. Give a hf data set obj (batches are data set objs sometimes)."""
     batch = get_data_from_hf_dataset(dataset_or_batch, streaming=streaming, batch_size=batch_size)
@@ -64,7 +143,7 @@ def get_size_of_seq_len(dataset_or_batch, verbose: bool = True, streaming: bool 
 
 def get_column_names(dataset, 
                     #   split: str = 'train',
-                      method: str = 'features', 
+                      method: str = 'keys', 
                       streaming: bool = True,
                       ):
     if method == 'features':
@@ -81,9 +160,9 @@ def get_column_names(dataset,
 def get_data_from_hf_dataset(dataset, 
                              streaming: bool = True, 
                              batch_size: int = 4, 
-                             shuffle: bool= False, # shuffle is better but slower afaik
-                             seed: int = 0, 
-                             buffer_size: int = 500_000,
+                            #  shuffle: bool= False, # shuffle is better but slower afaik
+                            #  seed: int = 0, 
+                            #  buffer_size: int = 500_000,
                              ):
     """ Gets data from a HF dataset, it's usually an iterator object e.g., some ds.map(fn, batched=True, remove_columns=remove_columns) has been applied. 
     Handles both streaming and non-streaming datasets, take for streaming and select for non-streaming.
@@ -134,6 +213,13 @@ def group_texts(examples, # if batched=True it's a dict of input_ids, attention_
     tokenize_function = lambda examples: tokenize_function(examples, tokenizer=tokenizer) 
     tokenized_datasets = raw_datasets.map(tokenize_function, batched=True, remove_columns=column_names)
 
+    if used as above then examples is
+    examples = {'input_ids': [[...], [...], ...], 'attention_mask': [[...], [...], ...], 'labels': [[...], [...], ...]]]}
+    examples.keys() = dict_keys(['input_ids', 'attention_mask'])
+    type(examples) = <class 'dict'>
+    type(examples['input_ids']) = <class 'list'>
+    len(examples['input_ids']) = 1000  # if batched=True
+
     # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a remainder
     # for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value might be slower
     # to preprocess.
@@ -146,7 +232,7 @@ def group_texts(examples, # if batched=True it's a dict of input_ids, attention_
     total_length = len(concatenated_examples[list(examples.keys())[0]])
     # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
     # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
-    total_length = (total_length // block_size) * block_size
+    total_length = (total_length // block_size) * block_size  # rounds down
     # Split by chunks of max_len.
     result = {
         k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
@@ -178,6 +264,8 @@ def group_texts_v2(examples, # if batched=True it's a dict of input_ids, attenti
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map    
     """
     # Concatenate all texts for each key in the examples e.g., it creates one concatenated list of all input_ids, one for all attention_mask, etc.
+    # for column_name in examples.keys():
+    #     # chain makes an iterator that returns elements from each iterator in order, basically concatenates iterators 
     concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
     total_length = len(concatenated_examples[list(examples.keys())[0]])
     # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
@@ -188,6 +276,17 @@ def group_texts_v2(examples, # if batched=True it's a dict of input_ids, attenti
         k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
         for k, t in concatenated_examples.items()
     }
+    # # get sequences of length block_size, then add eos token to end of each sequence and mask the rest of the sequence
+    # result = {}
+    # for k, t in concatenated_examples.items():
+    #     # Initialize a list for each key (really key="text" is the one we care about) in the result
+    #     result[k] = []
+    #     total_length = len(t)  # Assuming t is a list or has a length
+    #     for i in range(0, total_length, block_size):
+    #         # Append the sublist of t from i to i + block_size
+    #         seq = t[i : i + block_size]
+
+    #         result[k].append(t[i : i + block_size])
     result["labels"] = result["input_ids"].copy()
     return result
 
@@ -239,6 +338,85 @@ def collate_fn_train_only_first_eos_token_mask_everything_after_it(data: list[di
                 tokenized_data["labels"][idx, subsequent_eos_position] = -100
                 assert tokenized_data["labels"][idx, subsequent_eos_position] == -100, "The label for the subsequent_eos_position incorrect! Should be -100."
     return tokenized_data
+
+# -- eval code
+
+def compute_metrics(eval_preds):
+    """ todo document clearly, from SS's code. """
+    import evaluate
+    metric = evaluate.load("accuracy")
+    preds, labels = eval_preds
+    # preds have the same shape as the labels, after the argmax(-1) has been calculated
+    # by preprocess_logits_for_metrics but we need to shift the labels
+    labels = labels[:, 1:].reshape(-1)
+    preds = preds[:, :-1].reshape(-1)
+    return metric.compute(predictions=preds, references=labels)
+
+def whole_eval(model, 
+         path, 
+         name, 
+         split, 
+         tokenizer, 
+         block_size,
+         output_dir,
+         max_eval_samples: int = 1028, 
+         streaming: bool = True,
+         ):
+    """
+    path, name, split = 'suolyer/pile_openwebtext2', None, 'validation'  # the one sudharsan used
+    """
+    eval_dataset = load_dataset(path, name, streaming=streaming, split=split).with_format("torch") 
+    eval_dataset = raw_dataset_2_lm_data(eval_dataset, tokenizer, block_size)
+    eval_dataset = eval_dataset.take(max_eval_samples)
+
+    print(f'Saving eval results at: {output_dir=}') # The output directory where the model predictions and checkpoints will be written.
+    eval_args = TrainingArguments(output_dir=output_dir, fp16=False, bf16=torch.cuda.get_device_capability(torch.cuda.current_device())[0] >= 8)
+
+    trainer = Trainer(model=model, args=eval_args, train_dataset=None, eval_dataset=eval_dataset)
+    metrics = trainer.evaluate()
+    try:
+        perplexity = math.exp(metrics["eval_loss"])
+    except OverflowError:
+        perplexity = float("inf")
+    metrics["perplexity"] = perplexity
+    print(f'Eval metrics: {metrics=}')
+    trainer.log_metrics("eval", metrics)  # display metrics
+    trainer.save_metrics("eval", metrics)
+    return metrics
+
+def eval_hf(trainer: Trainer, path, name, split,):
+    metrics = trainer.evaluate()
+    try:
+        perplexity = math.exp(metrics["eval_loss"])
+    except OverflowError:
+        perplexity = float("inf")
+    metrics["perplexity"] = perplexity
+    print(f'Eval metrics: {metrics=}')
+    trainer.log_metrics(f"eval_{path}_{name}_{split}", metrics)  # display metrics
+    trainer.save_metrics(f"eval_{path}_{name}_{split}", metrics)
+    return metrics
+
+def eval_hf_with_subsample(path, name, split, model, tokenizer, block_size, output_dir, 
+                           max_eval_samples: int = 1024,
+                           streaming: bool = True, 
+                           verbose: bool = True,
+                           print_str: Optional[str] = None,
+                           ):
+    eval_dataset = load_dataset(path, name, streaming=streaming, split=split).with_format("torch") 
+    eval_dataset2 = raw_dataset_2_lm_data(eval_dataset, tokenizer, block_size)
+    if max_eval_samples is None:
+        eval_batch2 = eval_dataset2 
+    else:
+        eval_batch2 = eval_dataset2.take(max_eval_samples)
+    print(f'Saving eval results at: {output_dir=}') # The output directory where the model predictions and checkpoints will be written.
+    eval_args = TrainingArguments(output_dir=output_dir, fp16=False, bf16=torch.cuda.get_device_capability(torch.cuda.current_device())[0] >= 8)
+    trainer = Trainer(model=model, args=eval_args, train_dataset=None, eval_dataset=eval_batch2)
+    metrics = eval_hf(trainer, path, name, split,)
+    if verbose:
+        print(f'----> {path=}, {name=}, {split=}, {metrics=}')
+    if print_str is not None:
+        print(print_str)
+    return metrics
 
 # -- unit tests -- #
 
@@ -301,6 +479,7 @@ def _test_train_dataset_setup_for_main_code():
     # path, name, data_files, split = ['csv'], [None], [os.path.expanduser('~/data/maf_data/maf_textbooks_csv_v1/train.csv')], ['train']
     # path, name, data_files, split = ['suolyer/pile_pile-cc'] + ['parquet'] * 4, [None] + ['hacker_news', 'nih_exporter', 'pubmed', 'uspto'], [None] + [urls_hacker_news, urls_nih_exporter, urls_pubmed, urls_uspto], ['validation'] + ['train'] * 4
     # path, name, data_files, split = ['UDACA/PileSubsets'], ['uspto'], [None], ['train']
+    # path, name, data_files, split = ['UDACA/PileSubsets'], ['pubmed'], [None], ['train']
     path, name, data_files, split = ['UDACA/PileSubsets', 'UDACA/PileSubsets'], ['uspto', 'pubmed'], [None, None], ['train', 'train']
 
     # -- Get tokenizer and model
@@ -354,9 +533,60 @@ def _test_train_dataset_setup_for_main_code():
         print(len(seq))
     print('Success!')
 
+def _test_expt_planning():
+    # -- 2.5B tokens
+    num_tokens_desired: int = int(2.5e9)
+    batch_size = 32
+    num_batches = 1
+    L = 4096
+    # num_tokens_trained = max_steps * batch_size * L * num_batches
+    max_steps = num_tokens_desired / (batch_size * L * num_batches)
+    print(f'{max_steps=}')
+    # 19_073
+    # 281:07:43 --> 11 days ...
+
+    # -- 5.5M tokens
+    num_tokens_desired: int = int(5.5e6)
+    max_steps = num_tokens_desired / (batch_size * L * num_batches)
+    print(f'{max_steps=}')
+    # 42
+
+def _test_utils_padding_and_eos():
+    # GPT2 tokenizer
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    block_size = 1024
+    print(f'{tokenizer.model_max_length=}')
+    print(f'{block_size=}')
+    raw_dataset = load_dataset("c4", "en", streaming=True, split="train").with_format("torch")
+    lm_dataset = raw_dataset_2_lm_data(raw_dataset, tokenizer, block_size=block_size)
+    # take a batch of size 2 and print it
+    batch = get_data_from_hf_dataset(lm_dataset, streaming=True, batch_size=2) 
+    print(f'{batch=}')
+    data_batch = next(iter(batch))
+    # todo: test that when length changes attention mask labels etc make sense
+    # todo: do we need to put eos & padding and make sure label = -1? 
+    print()
+
+def _test_log_trainer():
+    # gpt2 model
+    model = AutoModelForCausalLM.from_pretrained("gpt2")
+    model = model.to("cuda")
+    raw_dataset = load_dataset("c4", "en", streaming=True, split="train").with_format("torch")
+    eval_dataset = raw_dataset.take(2)
+    name = 'c4_fake'
+    eval_args = TrainingArguments(output_dir='.') 
+    metrics = {'eval_loss': 0.1, 'eval_runtime': 0.1, 
+               'eval_samples_per_second': 0.1, 'eval_steps_per_second': 0.1, 'perplexity': 0.1, 'name': name}
+    # trainer.save_metrics(f"eval_{name}", metrics)
+    trainer = Trainer(model=model, args=eval_args, train_dataset=None, eval_dataset=eval_dataset)
+    trainer.log_metrics(f"eval_{name}", metrics)  # display metrics
+
 if __name__ == "__main__":
     from time import time
     start_time = time()
     # _test_all_batches_are_size_block_size()
-    _test_train_dataset_setup_for_main_code()
+    # _test_train_dataset_setup_for_main_code()
+    # _test_expt_planning()
+    # _test_utils_padding_and_eos()
+    _test_log_trainer()
     print(f"Done!\a Total time: {time() - start_time} seconds, or {(time() - start_time)/60} minutes. or {(time() - start_time)/60/60} hours.\a")
