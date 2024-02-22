@@ -84,19 +84,17 @@ def train():
     import wandb
     # - Dryrun
     mode = 'dryrun'; seed = 0; report_to = 'none'
+    mode = 'online'; seed = 0; report_to = 'wandb'
 
-    # - Online (real experiment)
-    # mode = 'online'; seed = 0; report_to = 'wandb'
-
-    # - train data sets
+    # -- Train data sets
     # path, name, data_files, split = ['c4'], ['en'], [None], ['train']
+    # - UDACA's
     path, name, data_files, split = ['UDACA/PileSubsets'], ['uspto'], [None], ['train']
-    # path, name, data_files, split = ['UDACA/PileSubsets'], ['pubmed'], [None], ['train']
-    # path, name, data_files, split = ['UDACA/PileSubsets', 'UDACA/PileSubsets'], ['uspto', 'pubmed'], [None, None], ['train', 'train']
+    path, name, data_files, split = ['UDACA/PileSubsets'], ['pubmed'], [None], ['train']
+    path, name, data_files, split = ['UDACA/PileSubsets', 'UDACA/PileSubsets'], ['uspto', 'pubmed'], [None, None], ['train', 'train']
     # - models
     # pretrained_model_name_or_path = 'gpt2'  # this is the smallest model gpt2, 124M params https://huggingface.co/gpt2 
     # pretrained_model_name_or_path = 'meta-llama/Llama-2-7b-hf'
-    # pretrained_model_name_or_path = 'meta-llama/Llama-2-7b-chat-hf'
     # pretrained_model_name_or_path = 'meta-llama/Llama-2-13b-hf'
     # pretrained_model_name_or_path = 'meta-llama/Llama-2-70b-hf'
     # pretrained_model_name_or_path = 'mistralai/Mistral-7B-v0.1'
@@ -106,7 +104,10 @@ def train():
     max_steps = 2
     # max_steps = 300
     # max_steps = 866 # <- CHANGE THIS 12hs with with baby llama2 v1 36m 1, 32
-    # max_steps = 1_553  # 13.5hs llama2 full reinit 4*8=32=B 1024=L for 6.3M tokens
+    # max_steps = 1_553  # 22-24hs llama2 full reinit 4*8=32=B 1024=L for 6.3M tokens
+    # max_steps = 3_000  # 2.75729 days rate=79.41secs/it toks=49.1M
+    max_steps = 30_000 # 27.5729 days rate=79.41secs/it toks=491M
+    # max_steps = 300_000 # 275.729 days rate=79.41secs/it toks=
     # max_steps = 5_000
     # max_steps = 61_036  # 3.8 days for B=32 L=512 rate=5.43secs/it for 1B=1e9tokens
     # max_steps = 78_853 # 4.6 days L=512 B=32 r=5.43 ~1.21B 29,999MiB
@@ -114,8 +115,8 @@ def train():
     # max_steps = 1_761 # <- CHANGE THIS 12hs with with baby llama2 v1 36m 5, 6 0.2168M tokens
     # max_steps = 19_073 # <- CHANGE THIS  11 days with baby llama2 v1 36m 1, 32
     # max_steps = 306_000 # <- CHANGE THIS 12hs with with baby llama2 v1 36m 1, 32 35.1 tokens
-    # max_length = 4096
-    max_length = 1024
+    max_length = 4096
+    # max_length = 1024
     # max_length = 512
     # max_length = 256
     num_batches=1
@@ -143,19 +144,21 @@ def train():
     print(f'{batch_size=} {gradient_accumulation_steps=} {gradient_checkpointing=} {num_epochs=}')
     # -- Wandb
     CUDA_VISIBLE_DEVICES = os.environ.get('CUDA_VISIBLE_DEVICES')
-    if CUDA_VISIBLE_DEVICES is not None:
-        print(f"CUDA_VISIBLE_DEVICES = {CUDA_VISIBLE_DEVICES}")
+    print(f"CUDA_VISIBLE_DEVICES = {CUDA_VISIBLE_DEVICES}")
     num_tokens_trained = max_steps * batch_size * max_length * num_batches 
     print(f'{num_tokens_trained=}')
     today = datetime.datetime.now().strftime('%Y-m%m-d%d-t%Hh_%Mm_%Ss')
-    run_name = f'beyond scale: {path} ({today=} ({name=}) {data_mixture_name=} {probabilities=} {pretrained_model_name_or_path=} {data_files=} {max_steps=} {batch_size=} {num_tokens_trained=} {gradient_accumulation_steps=} {optim=} {learning_rate=} {max_length=} {weight_decay=} {warmup_ratio=} {CUDA_VISIBLE_DEVICES=})'
+    current_tmux_session = os.environ.get("TMUX", "").split(",")[-1]
+    run_name = f'beyond scale: {path} ({today=} ({name=}) {data_mixture_name=} {probabilities=} {pretrained_model_name_or_path=} {data_files=} {max_steps=} {batch_size=} {num_tokens_trained=} {gradient_accumulation_steps=} {optim=} {learning_rate=} {max_length=} {weight_decay=} {warmup_ratio=} {CUDA_VISIBLE_DEVICES=} {current_tmux_session=})'
     print(f'\n---> {run_name=}\n')
     # - init wandb
     debug: bool = mode == 'dryrun'  # BOOL, debug?
     run = wandb.init(mode=mode, project="beyond-scale", name=run_name, save_code=True)
-    wandb.config.update({"path": path, "name": name, "today": today, 'probabilities': probabilities, 'batch_size': batch_size, 'debug': debug, 'data_mixture_name': data_mixture_name, 'streaming': streaming, 'data_files': data_files, 'seed': seed, 'pretrained_model_name_or_path': pretrained_model_name_or_path, 'num_epochs': num_epochs, 'gradient_accumulation_steps': gradient_accumulation_steps, 'CUDA_VISIBLE_DEVICES': CUDA_VISIBLE_DEVICES})
+    print(f'{run.url=}')
+    wandb.config.update({"path": path, "name": name, "today": today, 'probabilities': probabilities, 'batch_size': batch_size, 'debug': debug, 'data_mixture_name': data_mixture_name, 'streaming': streaming, 'data_files': data_files, 'seed': seed, 'pretrained_model_name_or_path': pretrained_model_name_or_path, 'num_epochs': num_epochs, 'gradient_accumulation_steps': gradient_accumulation_steps, 'CUDA_VISIBLE_DEVICES': CUDA_VISIBLE_DEVICES, "current_tmux_session": current_tmux_session})
     # run.notify_on_failure() # https://community.wandb.ai/t/how-do-i-set-the-wandb-alert-programatically-for-my-current-run/4891
     output_dir = Path(f'~/data/results_{today}/').expanduser() if not debug else Path(f'~/data/results/').expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
     print(f'{output_dir=}')
     print(f'{debug=}')
     print(f'{wandb.config=}')
@@ -177,37 +180,13 @@ def train():
         print(f'{block_size=}')
         print()
     elif 'Llama-2' in pretrained_model_name_or_path or 'Mistral' in pretrained_model_name_or_path:
-        # - llama2
+        # - LLama2, later qlora: https://github.com/artidoro/qlora/blob/7f4e95a68dc076bea9b3a413d2b512eca6d004e5/qlora.py#L347C13-L347C13
         from transformers import AutoModelForCausalLM, BitsAndBytesConfig, AutoTokenizer
-        # bf16 or fp32
         torch_dtype = torch.bfloat16 if torch.cuda.get_device_capability(torch.cuda.current_device())[0] >= 8 else torch.float32 # if >= 8 ==> brain float 16 available or set to True if you always want fp32
-        # get model
-        model = AutoModelForCausalLM.from_pretrained(
-            pretrained_model_name_or_path,
-            # quantization_config=quantization_config,
-            # device_map=device_map,  # device_map = None  https://github.com/huggingface/trl/blob/01c4a35928f41ba25b1d0032a085519b8065c843/examples/scripts/sft_trainer.py#L82
-            trust_remote_code=True,
-            torch_dtype=torch_dtype,
-            use_auth_token=True,
-        )
-        # https://github.com/artidoro/qlora/blob/7f4e95a68dc076bea9b3a413d2b512eca6d004e5/qlora.py#L347C13-L347C13
-        tokenizer = AutoTokenizer.from_pretrained(
-            pretrained_model_name_or_path,
-            # cache_dir=args.cache_dir,
-            padding_side="right",
-            use_fast=False, # Fast tokenizer giving issues.
-            # tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
-            # tokenizer_type='llama',
-            trust_remote_code=True,
-            use_auth_token=True,
-            # token=token,  # load from cat keys/brandos_hf_token.txt if you want to load it in python and not run huggingface-cli login
-        )
-        # - Ensure padding token is set TODO: how does this not screw up the fine-tuning? e.g., now model doesn't learn to predict eos since it's padded our by mask, ref: https://discuss.huggingface.co/t/why-does-the-falcon-qlora-tutorial-code-use-eos-token-as-pad-token/45954
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            print(f'{tokenizer.pad_token=}')
-        print(f'{tokenizer.eos_token=}')
-        print(f'{ tokenizer.eos_token_id=}')
+        model = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True, torch_dtype=torch_dtype, use_auth_token=True)
+        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path, padding_side="right", use_fast=False, trust_remote_code=True, use_auth_token=True)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token_id is None else tokenizer.pad_token
+        print(f'{tokenizer.pad_token=} {tokenizer.eos_token_id=}')
         # get context length for setting max length for training
         if hasattr(model.config, "context_length"):
             print("Context length:", model.config.context_length)
@@ -237,8 +216,10 @@ def train():
     # Sanity check -- is loss random? lnV = -ln(1/V) = -ln(1/50257) = 10.82 since CE = avg_i v_i * ln(1/p_i) but only one token is right so vi = 1 for some i so CE = ln(1/p_i)
     print(f'vocab_size: {len(tokenizer)=} \nExpected random loss: {math.log(len(tokenizer))=}')
     print(f"CUDA version: {torch.version.cuda=}")
+    print(f'{output_dir=}')
     eval_hf_with_subsample('UDACA/pile_openwebtext2', None, 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=2, print_str='> Eval OpenWebtext rand mdl')
     eval_hf_with_subsample('c4', 'en', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=2, print_str='> Eval C4 rand mdl')
+    eval_hf_with_subsample('wikitext', 'wikitext-103-v1', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=2,  print_str='> Eval wikitext rand mdl')
     
     # --- Load datasets
     # -- Get train data set
@@ -248,6 +229,7 @@ def train():
     print(f'{probabilities=}')
     # - Get raw train data set
     raw_train_datasets = interleave_datasets(train_datasets, probabilities)
+    # -TODO replace bellow with raw_dataset_2_lm_data(...)
     remove_columns = get_column_names(raw_train_datasets)  # remove all keys that are not tensors to avoid bugs in collate function in task2vec's pytorch data loader
     # - Get tokenized train data set
     # Note: Setting `batched=True` in the `dataset.map` function of Hugging Face's datasets library processes the data in batches rather than one item at a time, significantly speeding up the tokenization and preprocessing steps.
@@ -260,6 +242,7 @@ def train():
     print(f'{len(next(iter(batch))["input_ids"])=}')
     assert all(len(data_dict['input_ids']) == block_size for data_dict in iter(batch)), f'Error, some seq in batch are not of length {block_size}'
     train_dataset = lm_train_dataset
+    # -TODO replace upt to here
 
     # -- max steps manually decided depending on how many tokens we want to train on
     per_device_train_batch_size = batch_size
@@ -302,7 +285,7 @@ def train():
 
     # -- Init Trainer
     print(f'{train_dataset=}')
-    trainer = Trainer(
+    trainer: Trainer = Trainer(
         model=model,
         args=training_args,  
         train_dataset=train_dataset,
@@ -310,27 +293,44 @@ def train():
 
     # - Train
     trainer.train()
-    trainer.save_model(output_dir=output_dir)  # TODO is this really needed? https://discuss.huggingface.co/t/do-we-need-to-explicity-save-the-model-if-the-save-steps-is-not-a-multiple-of-the-num-steps-with-hf/56745
+    # note: seems trainer doesn't save tokenizer automatically https://chat.openai.com/c/c40db3a8-b614-40e0-b492-67319a1807e7 
+    last_mdl_ckpt_path: Path = output_dir / 'final_ckpt'
+    last_mdl_ckpt_path.mkdir(parents=True, exists_ok=True)
+    trainer.save_model(output_dir=last_mdl_ckpt_path)
+    # trainer.save_model(output_dir=output_dir)  # TODO is this really needed? https://discuss.huggingface.co/t/do-we-need-to-explicity-save-the-model-if-the-save-steps-is-not-a-multiple-of-the-num-steps-with-hf/56745
+    ## tokenizer.save_pretrained(output_dir=output_dir)  # ref: https://discuss.huggingface.co/t/do-we-need-to-explicity-save-the-model-if-the-save-steps-is-not-a-multiple-of-the-num-steps-with-hf/56745/3
 
-    # -- Evaluation, NOTE: we are evaluating at the end not during training
+    # --- Evaluation, NOTE: we are evaluating at the end not during training
     print()
-    # - Evaluate model on OpenWebtext
-    print('---- Evaluate model on OpenWebtext')
-    metrics = eval_hf_with_subsample('UDACA/pile_openwebtext2', None, 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=4)
-    print(f'OpenWebtext: {metrics=}')
-    # - Evaluate on C4
-    print('---- Evaluate model on C4')
-    metrics = eval_hf_with_subsample('c4', 'en', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=4)
-    print(f'C4: {metrics=}')
-    # - Evluate on whole datasets
+    # # -- Eval subsample
+    # print('---- Evaluate model on OpenWebtext')
+    # metrics = eval_hf_with_subsample('UDACA/pile_openwebtext2', None, 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=8)
+    # print(f'OpenWebtext (8 val samples): {metrics=}')
+    # print('---- Evaluate model on C4')
+    # metrics = eval_hf_with_subsample('c4', 'en', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=8)
+    # not here first in case it crashes OWT2
+    # print(f'C4 (8 val samples): {metrics=}')
+    # # print('---- Evaluate model on wikitext-103-v1')
+    # # metrics = eval_hf_with_subsample('wikitext', 'wikitext-103-v1', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=8)
+    # # print(f'Wikitext (8 val samples): {metrics=}')
+
+    # -- Eval whole datasets
     print('---- Evaluate model on Whole OpenWebtext')
     metrics = eval_hf_with_subsample('UDACA/pile_openwebtext2', None, 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=None)
-    # eval_hf(trainer=Trainer(model=model, args=eval_args, train_dataset=None, eval_dataset=eval_dataset1))
-    print(f'OpenWebtext: {metrics=}')
+    print(f'OpenWebtext whole: {metrics=}')
+    # c4 evals first in case of errors
+    print('---- Evaluate model on C4')
+    metrics = eval_hf_with_subsample('c4', 'en', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=8)
+    print(f'C4 (8 val samples): {metrics=}')
     print('---- Evaluate model on Whole C4')
     metrics = eval_hf_with_subsample('c4', 'en', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=None)
-    # eval_hf(trainer=Trainer(model=model, args=eval_args, train_dataset=None, eval_dataset=eval_dataset2))
-    print(f'C4: {metrics=}')
+    print(f'C4 whole: {metrics=}')
+    # print('---- Evaluate model on Whole wikitext-103-v1')
+    # metrics = eval_hf_with_subsample('wikitext', 'wikitext-103-v1', 'validation', model, tokenizer, block_size, output_dir, max_eval_samples=None)
+    # print(f'Wikitext whole: {metrics=}')
+    
+    # -- Print config to show in log what this run was especially data set
+    print(f'{wandb.config=}')
     print('Done!\a')
 
 def main():  

@@ -36,24 +36,29 @@ reauth
 
 tmux ls
 tmux new -s 1
-reauth
+reautexport CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -k2 -nr | head -n 1 | awk -F ', ' '{print $1}')h
 
 source $AFS/.bashrc
 conda activate beyond_scale
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=6
 echo CUDA_VISIBLE_DEVICES = $CUDA_VISIBLE_DEVICES
-# export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -k2 -nr | head -n 1 | awk -F ', ' '{print $1}')
+export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -k2 -nr | head -n 1 | awk -F ', ' '{print $1}')
 echo CUDA_VISIBLE_DEVICES = $CUDA_VISIBLE_DEVICES
 export HF_TOKEN=$(cat ~/keys/brandos_hf_token.txt)
 echo $HF_TOKEN
 
 # -- Run
 # python ~/beyond-scale-language-data-diversity/src/diversity/div_coeff.py
-# python ~/beyond-scale-language-data-diversity/src/train/reinit_hf_model.py
 
+export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -k2 -nr | head -n 1 | awk -F ', ' '{print $1}')
 python ~/beyond-scale-language-data-diversity/src/training/train.py
-# python ~/beyond-scale-language-data-diversity/src/training/train_baby_llama2.py
 
+# export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -k2 -nr | head -n 1 | awk -F ', ' '{print $1}')
+# python ~/beyond-scale-language-data-diversity/src/diversity/embeddings/div_act_based.py
+
+
+export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits | sort -k2 -nr | head -n 1 | awk -F ', ' '{print $1}')
+python ~/beyond-scale-language-data-diversity/src/training/eval.py
 
 # -- other option is to run `echo $SU_PASSWORD | /afs/cs/software/bin/reauth` inside of python, right?
 export JOB_PID=$!
